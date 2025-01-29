@@ -1,96 +1,75 @@
 const axios = require("axios");
+const cheerio = require("cheerio");
 const readline = require("readline");
 
-const WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php";
-const KEVIN_BACON_TITLE = "Kevin_Bacon";
+const BASE_URL = "https://en.wikipedia.org";
+const KEVIN_BACON_URL = `${BASE_URL}/wiki/Kevin_Bacon`;
 
 /**
- * Extracts the Wikipedia page title from a URL or directly uses the provided title.
- * @param {string} input - The input provided by the user.
- * @returns {string} - The Wikipedia page title.
+ * Fetches and parses the HTML content of a Wikipedia page to extract links.
+ * @param {string} url - The Wikipedia page URL.
+ * @returns {Promise<string[]>} - A promise that resolves to an array of links on the page.
  */
-function extractTitle(input) {
-  if (input.startsWith("https://en.wikipedia.org/wiki/")) {
-    return input.replace("https://en.wikipedia.org/wiki/", "").replace(/_/g, " ");
-  }
-  return input.replace(/_/g, " ");
-}
-
-/**
- * Fetches links from a Wikipedia page using the Wikipedia API.
- * @param {string} title - The title of the Wikipedia page.
- * @returns {Promise<string[]>} - A promise that resolves to an array of linked page titles.
- */
-async function fetchWikiLinks(title) {
+async function fetchWikiLinks(url) {
   try {
-    const response = await axios.get(WIKIPEDIA_API_URL, {
-      params: {
-        action: "query",
-        titles: title,
-        prop: "links",
-        format: "json",
-        pllimit: "max",
-      },
+    const response = await axios.get(url);
+    const $ = cheerio.load(response.data);
+
+    const links = [];
+    $("a[href^='/wiki/']").each((_, element) => {
+      const href = $(element).attr("href");
+      if (href && !href.includes(":") && !href.includes("#")) {
+        links.push(BASE_URL + href);
+      }
     });
 
-    const pages = response.data.query.pages;
-    const pageId = Object.keys(pages)[0];
-
-    if (!pages[pageId].links) {
-      return [];
-    }
-
-    return pages[pageId].links.map(link => link.title);
+    return links;
   } catch (error) {
-    console.error(`Error fetching links for ${title}: ${error.message}`);
+    console.error(`Error fetching links for ${url}: ${error.message}`);
     return [];
   }
 }
 
 /**
- * Finds the separation between a given page and the Kevin Bacon page.
- * @param {string} startTitle - The title of the starting Wikipedia page.
+ * Finds the degree of separation between a given page and the Kevin Bacon page using BFS.
+ * @param {string} startUrl - The starting Wikipedia page URL.
  * @returns {Promise<number>} - The degree of separation or -1 if not reachable.
  */
-async function findDegreeOfSeparation(startTitle) {
-  const queue = [[startTitle, 0]]; // Queue of [title, degree]
+async function findDegreeOfSeparation(startUrl) {
+  const queue = [[startUrl, 0]]; // Queue of [url, degree]
   const visited = new Set();
 
   while (queue.length > 0) {
-    const [currentTitle, degree] = queue.shift();
+    const [currentUrl, degree] = queue.shift();
 
     // Check if we've reached the Kevin Bacon page
-    if (currentTitle === KEVIN_BACON_TITLE) {
+    if (currentUrl === KEVIN_BACON_URL) {
       return degree;
     }
 
     // Skip already visited pages
-    if (visited.has(currentTitle)) {
+    if (visited.has(currentUrl)) {
       continue;
     }
 
-    visited.add(currentTitle);
+    visited.add(currentUrl);
 
     // Fetch links for the current page
-    const links = await fetchWikiLinks(currentTitle);
+    const links = await fetchWikiLinks(currentUrl);
 
-    const promises = links.map(link => fetchWikiLinks(link));
-    const results = await Promise.all(promises);
-
-    results.forEach((links, index) => {
-        links.forEach(link => {
-            if (!visited.has(link)) {
-            queue.push([link, degree + 1]);
-            }
-        });
-    });
+    // Add unvisited links to the queue
+    for (const link of links.slice(0, 50)) { // Limit to 50 links per page
+      if (!visited.has(link)) {
+        queue.push([link, degree + 1]);
+      }
+    }
   }
 
   return -1; // Kevin Bacon's page is not reachable
 }
 
 /**
- * Sets up the CLI to accept a starting Wikipedia page title or URL and computes the result.
+ * Sets up the CLI to accept a starting Wikipedia page URL and computes the result.
  */
 function setupCLI() {
   const rl = readline.createInterface({
@@ -98,11 +77,10 @@ function setupCLI() {
     output: process.stdout,
   });
 
-  rl.question("Enter the Wikipedia page title or URL to start from: ", async (input) => {
-    const startTitle = extractTitle(input);
-    console.log(`Finding the degree of separation from ${startTitle} to Kevin Bacon...`);
+  rl.question("Enter the Wikipedia page URL to start from: ", async (startUrl) => {
+    console.log(`Finding the degree of separation from ${startUrl} to Kevin Bacon...`);
 
-    const degree = await findDegreeOfSeparation(startTitle);
+    const degree = await findDegreeOfSeparation(startUrl);
 
     if (degree === -1) {
       console.log("Kevin Bacon's page is not reachable from the given page.");
